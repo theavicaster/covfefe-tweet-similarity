@@ -5,7 +5,7 @@ import setup.SparkSetup
 import utilities.CosineSimilarity.cosineSimilarity
 import utilities.SentencesToTokens.toTokens
 
-import org.apache.spark.ml.feature.{HashingTF, IDF, StopWordsRemover}
+import org.apache.spark.ml.feature.{HashingTF, IDF, StopWordsRemover, Word2Vec}
 import org.apache.spark.sql.functions.{col, length, udf}
 
 object SparkTextSimilarity {
@@ -54,22 +54,53 @@ class SparkTextSimilarityProcessor(appName: String)
 
   spark.udf.register("cosineSimilarity", cosineSimilarity)
 
-  val ans = spark.sql("SELECT i.tweet AS tweet1, j.tweet AS tweet2, cosineSimilarity(i.tf_idf, j.tf_idf) AS similarity " +
+  val tfIdfSimilarity = spark.sql("SELECT i.tweet AS tweet1, j.tweet AS tweet2, cosineSimilarity(i.tf_idf, j.tf_idf) AS similarity " +
     "FROM i JOIN j " +
     "WHERE i.ID < j.ID " +
     "AND i.tweet <> j.tweet " +
     "ORDER BY similarity DESC ")
 
-  ans.select("tweet1", "tweet2", "similarity")
+  tfIdfSimilarity.select("tweet1", "tweet2", "similarity")
     .show(25, truncate = false)
 
-  ans.coalesce(1)
+  tfIdfSimilarity.coalesce(1)
     .write
     .format("csv")
     .option("header","true")
     .option("sep","|")
     .mode("overwrite")
-    .save("src/main/resources/results")
+    .save("src/main/resources/results/tf-idf")
+
+  val word2vec = new Word2Vec()
+    .setInputCol("tweetFiltered")
+    .setOutputCol("wordVector")
+    .setMinCount(1)
+  val w2vModel = word2vec.fit(filteredTweets)
+
+  val doc2VecData = w2vModel.transform(filteredTweets) // average of word2vec vectors
+    .select("ID", "tweet", "wordVector")
+
+  doc2VecData.show(5)
+
+  doc2VecData.createOrReplaceTempView("a")
+  doc2VecData.createOrReplaceTempView("b")
+
+  val doc2VecSimilarity = spark.sql("SELECT a.tweet AS tweet1, b.tweet AS tweet2, cosineSimilarity(a.wordVector, b.wordVector) AS similarity " +
+    "FROM a JOIN b " +
+    "WHERE a.ID < b.ID " +
+    "AND a.tweet <> b.tweet " +
+    "ORDER BY similarity DESC ")
+
+  doc2VecSimilarity.select("tweet1", "tweet2", "similarity")
+    .show(25, truncate = false)
+
+  doc2VecSimilarity.coalesce(1)
+    .write
+    .format("csv")
+    .option("header","true")
+    .option("sep","|")
+    .mode("overwrite")
+    .save("src/main/resources/results/word2vec")
 
 }
 
